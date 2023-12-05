@@ -3,8 +3,9 @@ from typing import Any, Dict
 
 from freqtrade import constants
 from freqtrade.configuration import setup_utils_configuration
-from freqtrade.exceptions import DependencyException, OperationalException
-from freqtrade.state import RunMode
+from freqtrade.enums import RunMode
+from freqtrade.exceptions import OperationalException
+from freqtrade.misc import round_coin_value
 
 
 logger = logging.getLogger(__name__)
@@ -14,6 +15,7 @@ def setup_optimize_configuration(args: Dict[str, Any], method: RunMode) -> Dict[
     """
     Prepare the configuration for the Hyperopt module
     :param args: Cli args from Arguments()
+    :param method: Bot running mode
     :return: Configuration
     """
     config = setup_utils_configuration(args, method)
@@ -22,11 +24,17 @@ def setup_optimize_configuration(args: Dict[str, Any], method: RunMode) -> Dict[
         RunMode.BACKTEST: 'backtesting',
         RunMode.HYPEROPT: 'hyperoptimization',
     }
-    if (method in no_unlimited_runmodes.keys() and
-            config['stake_amount'] == constants.UNLIMITED_STAKE_AMOUNT):
-        raise DependencyException(
-            f'The value of `stake_amount` cannot be set as "{constants.UNLIMITED_STAKE_AMOUNT}" '
-            f'for {no_unlimited_runmodes[method]}')
+    if method in no_unlimited_runmodes.keys():
+        wallet_size = config['dry_run_wallet'] * config['tradable_balance_ratio']
+        # tradable_balance_ratio
+        if (config['stake_amount'] != constants.UNLIMITED_STAKE_AMOUNT
+                and config['stake_amount'] > wallet_size):
+            wallet = round_coin_value(wallet_size, config['stake_currency'])
+            stake = round_coin_value(config['stake_amount'], config['stake_currency'])
+            raise OperationalException(
+                f"Starting balance ({wallet}) is smaller than stake_amount {stake}. "
+                f"Wallet is calculated as `dry_run_wallet * tradable_balance_ratio`."
+                )
 
     return config
 
@@ -48,6 +56,22 @@ def start_backtesting(args: Dict[str, Any]) -> None:
     # Initialize backtesting object
     backtesting = Backtesting(config)
     backtesting.start()
+
+
+def start_backtesting_show(args: Dict[str, Any]) -> None:
+    """
+    Show previous backtest result
+    """
+
+    config = setup_utils_configuration(args, RunMode.UTIL_NO_EXCHANGE)
+
+    from freqtrade.data.btanalysis import load_backtest_stats
+    from freqtrade.optimize.optimize_reports import show_backtest_results, show_sorted_pairlist
+
+    results = load_backtest_stats(config['exportfilename'])
+
+    show_backtest_results(config, results)
+    show_sorted_pairlist(config, results)
 
 
 def start_hyperopt(args: Dict[str, Any]) -> None:
@@ -108,3 +132,27 @@ def start_edge(args: Dict[str, Any]) -> None:
     # Initialize Edge object
     edge_cli = EdgeCli(config)
     edge_cli.start()
+
+
+def start_lookahead_analysis(args: Dict[str, Any]) -> None:
+    """
+    Start the backtest bias tester script
+    :param args: Cli args from Arguments()
+    :return: None
+    """
+    from freqtrade.optimize.analysis.lookahead_helpers import LookaheadAnalysisSubFunctions
+
+    config = setup_utils_configuration(args, RunMode.UTIL_NO_EXCHANGE)
+    LookaheadAnalysisSubFunctions.start(config)
+
+
+def start_recursive_analysis(args: Dict[str, Any]) -> None:
+    """
+    Start the backtest recursive tester script
+    :param args: Cli args from Arguments()
+    :return: None
+    """
+    from freqtrade.optimize.analysis.recursive_helpers import RecursiveAnalysisSubFunctions
+
+    config = setup_utils_configuration(args, RunMode.UTIL_NO_EXCHANGE)
+    RecursiveAnalysisSubFunctions.start(config)
